@@ -1,0 +1,50 @@
+menu "WirelessConfiguration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            SSID (network name) for the example to connect to.
+    
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+            WiFi password (WPA or WPA2) for the example to use.
+    config HOSTNAME
+        string "Hostname"
+        default "Esp32"
+        help 
+            Hostname which is seen in your Router.
+
+endmenu
+
+menu "MQTT"
+    config BROKER_URL
+        string "MQTT Broker URL"
+            default "mqtt://"
+            help 
+                The URL of the MQTT-Broker
+    config TOPIC
+        string "MQTT Topic"
+            default "Topic"
+            help 
+                The topic of the published data  
+    config DATA_STARTUP
+        string "MQTT Data startup"
+            default "start"
+                help 
+                    The data published at Sturtup
+    config DATA_PIN2
+        string "MQTT Data Pin2"        
+            default "pin2"  
+            help
+                The data published after wakeup through 
+                an interrupt at pin 2
+    config DATA_PIN4
+        string "MQTT Data Pin4"        
+            default "pin4"  
+            help
+                The data published after wakeup through 
+                an interrupt at pin 4               
+endmenu
