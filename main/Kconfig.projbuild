@@ -47,4 +47,22 @@ menu "MQTT"
             help
                 The data published after wakeup through 
                 an interrupt at pin 4               
+    config DATA_PIN2_TIME
+        string "MQTT Data Pin2 Time"        
+            default "pin2time"  
+            help
+                The data published after wakeup through 
+                an time interrupt if pin 2 wasn't low
+    config DATA_PIN4_TIME
+        string "MQTT Data Pin4 Time"        
+            default "pin4time"  
+            help
+                The data published after wakeup through 
+                an time interrupt if pin 4 wasn't low  
+    config DATA_ERROR
+        string "MQTT Data ERROR"        
+            default "error"  
+            help
+                The data published after wakeup through 
+                an time interrupt if pin 4 and 2 wasn't low             
 endmenu

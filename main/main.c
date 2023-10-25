@@ -23,9 +23,12 @@
 #include "mqtt_client.h"
 #include "esp_event.h"
 #include "esp_system.h"
+#include "esp_check.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
+
+#define TIMER_WAKEUP_TIME_US (60 * 1000 * 1000)
 
 /* FreeRTOS event group to signal when we are connected properly */
 static EventGroupHandle_t wifi_event_group;
@@ -34,6 +37,9 @@ static EventGroupHandle_t wifi_event_group;
  * - are we connected to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
 const int PUBLISHED_BIT = BIT1;
+
+int jump = 1;
+uint64_t times;
 
 static const char* TAG = "main";
 const char* senddata = CONFIG_DATA_STARTUP;
@@ -139,62 +145,167 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 }
 
 void initWifi(void){
-ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_netif_init());
     wifi_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_t *Host = esp_netif_create_default_wifi_sta();
-    esp_netif_set_hostname(Host,CONFIG_HOSTNAME);
+    esp_netif_set_hostname(Host,CONFIG_HOSTNAME);               //Set Hostname of the Device
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_max_tx_power(80);
 
-    wifi_config_t wifi_config = {};
-    strncpy((char*)wifi_config.sta.ssid, CONFIG_WIFI_SSID, sizeof(wifi_config.sta.ssid));
-    strncpy((char*)wifi_config.sta.password, CONFIG_WIFI_PASSWORD, sizeof(wifi_config.sta.password));
-    wifi_config.sta.bssid_set = false;
+    wifi_config_t wifi_config = {                           //Set Wifi Config
+        .sta = {                                            //WIFI Mode STATION
+            .ssid = CONFIG_WIFI_SSID,                       //AP SSID is set in Menueconfig
+            .password = CONFIG_WIFI_PASSWORD,               //AP password is set in Menueconfig
+            .bssid_set = false,                             //Set BSSID of target AP ?
+            .pmf_cfg = {                                    //Protected Managment Frame
+                .capable = true,                            //Capable ?
+                .required = false,                           //Required ?
+            }   
+        }
+    };
 
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL,&instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL,&instance_got_ip));
 
     ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    ESP_LOGI(TAG, "wifi_init_sta finished.");
 }
 
-
+esp_err_t register_timer_wakeup(uint64_t time_in_us)
+{
+    ESP_RETURN_ON_ERROR(esp_sleep_enable_timer_wakeup(time_in_us), TAG, "Configure timer as wakeup source failed");
+    ESP_LOGI(TAG, "timer wakeup source is ready");
+    return ESP_OK;
+}
 
 void app_main(void)
 {
-    nvs_flash_init();
-    initWifi();
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
-    
-    
     uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
-    if (wakeup_pin_mask != 0) {
-    int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
-    printf("Wake up from GPIO %d\n", pin);
-        if (pin == 4){
-            senddata = CONFIG_DATA_PIN4;
-            }else if (pin == 2)
-        {
-            senddata = CONFIG_DATA_PIN2;
-        }
-    } else {
-    printf("Wake up from GPIO\n");
+    //Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
     }
-    mqtt_app_start();
-    xEventGroupWaitBits(wifi_event_group, PUBLISHED_BIT, false, true, portMAX_DELAY);     
+    ESP_ERROR_CHECK(ret);
+
+    
 
     const int ext_wakeup_pin_1 = 2;
     const uint64_t ext_wakeup_pin_1_mask = 1ULL << ext_wakeup_pin_1;
     const int ext_wakeup_pin_2 = 4;
     const uint64_t ext_wakeup_pin_2_mask = 1ULL << ext_wakeup_pin_2;
+    //vTaskDelay(1000 / portTICK_PERIOD_MS);
+    
+    jump=1;
+    rtc_gpio_init(GPIO_NUM_2);
+    rtc_gpio_init(GPIO_NUM_4);
+    rtc_gpio_set_direction(GPIO_NUM_2, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_dis(GPIO_NUM_2);
+    rtc_gpio_pullup_dis(GPIO_NUM_4);
+    rtc_gpio_pulldown_en(GPIO_NUM_2);
+    rtc_gpio_pulldown_en(GPIO_NUM_4);
+    rtc_gpio_hold_en(GPIO_NUM_2);
+    rtc_gpio_hold_en(GPIO_NUM_4);
+    bool GPIO2 = rtc_gpio_get_level(GPIO_NUM_2);
+    bool GPIO4 = rtc_gpio_get_level(GPIO_NUM_4);
+    printf("Pin2:%s&Pin4:%s\n", GPIO2 ? "true" : "false", GPIO4 ? "true" : "false");
+    
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs);
+    if (err == ESP_OK) {
+        size_t required_size;
+        err = nvs_get_str(nvs, "key", NULL, &required_size);
+        if (err == ESP_OK) {
+            char* saved_data = (char*)malloc(required_size);
+            if (saved_data != NULL) {
+                err = nvs_get_str(nvs, "key", saved_data, &required_size);
+                if (err == ESP_OK) {
+                    // Use saved_data (the retrieved string)
+                    printf("Retrieved string: %s\n", saved_data);
+                    senddata = saved_data;
+                }
+                //free(saved_data); // Don't forget to free the allocated memory
+            }
+        }
+        nvs_close(nvs);
+    }
 
-    printf("Enabling EXT1 wakeup on pins GPIO%d, GPIO%d\n", ext_wakeup_pin_1, ext_wakeup_pin_2);
-    esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask | ext_wakeup_pin_2_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+    switch (esp_sleep_get_wakeup_cause()) {
+        case ESP_SLEEP_WAKEUP_EXT1:
+            if (wakeup_pin_mask != 0) {
+            int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
+            printf("Wake up from GPIO %d\n", pin);
+                if (pin == 4){
+                    senddata = CONFIG_DATA_PIN4;
+                    }else if (pin == 2)
+                {
+                    senddata = CONFIG_DATA_PIN2;
+                }
+            } else {
+                printf("Wake up from GPIO\n");
+            }
+            break;
+        case ESP_SLEEP_WAKEUP_TIMER:
+            printf("Wake up from Timer\n");
+            //printf(senddata);
+            if (GPIO2 && GPIO4 == 0 && strcmp(senddata, CONFIG_DATA_PIN2_TIME) != 0){
+                printf("GPIO 2 High\n");
+                senddata = CONFIG_DATA_PIN2_TIME; 
+            }else if(GPIO4 && GPIO2 == 0 && strcmp(senddata, CONFIG_DATA_PIN4_TIME) != 0){
+                printf("GPIO 4 High\n");
+                senddata = CONFIG_DATA_PIN4_TIME;
+            }else if(GPIO2 && GPIO4 && strcmp(senddata, CONFIG_DATA_ERROR) != 0){
+                printf("GPIO 2 & 4 High\n");
+                senddata =CONFIG_DATA_ERROR;
+            }else {
+                jump = 0;
+            }
+            break;
+        default:
+            senddata = CONFIG_DATA_STARTUP;
+            break;
+    }
+    if (jump){
+        initWifi();
+        xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+        vTaskDelay(1000 / portTICK_PERIOD_MS); //wait for stable connection
+        mqtt_app_start();
+        xEventGroupWaitBits(wifi_event_group, PUBLISHED_BIT, false, true, portMAX_DELAY);     
+    } 
+    GPIO2 = rtc_gpio_get_level(GPIO_NUM_2);
+    GPIO4 = rtc_gpio_get_level(GPIO_NUM_4);
+    printf("Pin2:%s&Pin4:%s\n", GPIO2 ? "true" : "false", GPIO4 ? "true" : "false");
+    if (GPIO2 || GPIO4){
+        /* Enable wakeup from light sleep by timer */
+        if (jump == 0){
+            times = (30 * 60 * 1000 * 1000);
+        }else {
+            times = TIMER_WAKEUP_TIME_US;
+        }
+
+        register_timer_wakeup(times);
+        if (GPIO2 && GPIO4 == 0){
+            esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_2_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+            printf("Enable Pin 4\n");
+        }else if (GPIO4 && GPIO2 == 0){
+            esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+            printf("Enable Pin 2\n");
+        }
+  
+    }else esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask | ext_wakeup_pin_2_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
 
 #if CONFIG_IDF_TARGET_ESP32
     // Isolate GPIO12 pin from external circuits. This is needed for modules
@@ -202,6 +313,15 @@ void app_main(void)
     // to minimize current consumption.
     rtc_gpio_isolate(GPIO_NUM_12);
 #endif
+
+    err = nvs_open("storage", NVS_READWRITE, &nvs);
+if (err == ESP_OK) {
+    err = nvs_set_str(nvs, "key", senddata);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+}
 
     printf("Entering deep sleep\n");
     esp_deep_sleep_start();
