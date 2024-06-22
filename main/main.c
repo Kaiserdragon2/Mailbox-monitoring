@@ -155,7 +155,8 @@ void initWifi(void){
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     esp_wifi_set_ps(WIFI_PS_NONE);
-    esp_wifi_set_max_tx_power(80);
+    esp_wifi_set_max_tx_power(84);
+    esp_wifi_set_country_code("DE", true);
 
     wifi_config_t wifi_config = {                           //Set Wifi Config
         .sta = {                                            //WIFI Mode STATION
